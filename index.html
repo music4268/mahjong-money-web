@@ -1,0 +1,319 @@
+
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>麻將即時記帳</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f1f5f2;color:#183c2b;font-family:system-ui,-apple-system,sans-serif}
+main{max-width:560px;margin:auto;padding:15px}
+header{background:#176244;color:white;padding:22px;border-radius:18px}
+h1{margin:0 0 8px}
+section{background:white;border-radius:15px;padding:17px;margin:13px 0;box-shadow:0 2px 6px #0001}
+input,select,button{font:inherit;padding:12px;border:1px solid #cbd9d0;border-radius:10px}
+input,select{width:100%}
+button{cursor:pointer;background:#e9f0eb}
+button:disabled{opacity:.45}
+.primary{background:#16734d;color:white}
+.row{display:flex;gap:8px;align-items:center;margin:10px 0}
+.row>*{min-width:0}
+.row input{flex:1}
+.wide{width:100%}
+.hidden{display:none}
+.muted{color:#64776c;font-size:13px}
+.entry{padding:12px 0;border-bottom:1px solid #e5ebe7}
+.tabs{display:flex;gap:6px}
+.tabs button{flex:1;padding:10px 4px}
+.pos{color:#15824b}
+.neg{color:#b63c3c}
+label{display:block;margin:12px 0 5px}
+#message{white-space:pre-wrap;color:#a0472c}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>🀄 麻將即時記帳</h1>
+<div>放槍送出 → 贏家接收 → 全桌同步</div>
+<small id="connection">正在連線…</small>
+</header>
+
+<section id="setup">
+<h2>進入牌桌</h2>
+<label>你的名字</label>
+<input id="name" maxlength="20" placeholder="例如：阿明">
+<button class="primary wide" id="create">建立新牌桌</button>
+<label>或輸入朋友的房號</label>
+<input id="roomCode" placeholder="6 位房號" maxlength="8">
+<button class="wide" id="join">加入牌桌</button>
+<p class="muted">每個人用自己的手機加入，最多 8 位玩家。</p>
+</section>
+
+<div id="app" class="hidden">
+<section>
+<h2 id="roomTitle"></h2>
+<p id="people"></p>
+<button id="invite">分享房間連結</button>
+<button id="leave">離開畫面</button>
+</section>
+
+<div class="tabs">
+<button data-tab="pay">放槍</button>
+<button data-tab="inbox">待接收 <span id="count"></span></button>
+<button data-tab="score">總帳</button>
+</div>
+
+<section id="pay">
+<h2>我放槍了</h2>
+<label>贏家是誰？</label>
+<select id="winner"></select>
+<label>放幾台？</label>
+<input id="tai" type="number" min="0" max="100" value="3">
+<h2 id="amount"></h2>
+<button class="primary wide" id="send">送出，等待贏家接收</button>
+</section>
+
+<section id="inbox" class="hidden">
+<h2>等待我確認</h2>
+<div id="pending"></div>
+</section>
+
+<section id="score" class="hidden">
+<h2>累計輸贏</h2>
+<div id="scores"></div>
+<h3>已確認紀錄</h3>
+<div id="records"></div>
+</section>
+
+<section>
+<h3>底台設定</h3>
+<p class="muted">只有房主能修改；舊紀錄不會重新計算。</p>
+<label>底金</label>
+<input id="base" type="number" min="0">
+<label>每台金額</label>
+<input id="rate" type="number" min="0">
+<button id="save">儲存設定</button>
+</section>
+</div>
+
+<section><p id="message"></p></section>
+</main>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+import {getAuth,signInAnonymously} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import {getDatabase,ref,get,set,push,update,onValue,runTransaction} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-database.js";
+
+const config={
+apiKey:"AIzaSyBfS89htfSKgLRDo7kAes1IKHeArIyz6CY",
+authDomain:"mahjong-money.firebaseapp.com",
+databaseURL:"https://mahjong-money-default-rtdb.asia-southeast1.firebasedatabase.app",
+projectId:"mahjong-money",
+storageBucket:"mahjong-money.firebasestorage.app",
+messagingSenderId:"870936777992",
+appId:"1:870936777992:web:1e5302a1e4e45d35eb48bd"
+};
+
+const app=initializeApp(config);
+const auth=getAuth(app);
+const db=getDatabase(app);
+const $=id=>document.getElementById(id);
+const clean=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money=n=>Number(n||0).toLocaleString("zh-TW");
+const msg=s=>$("message").textContent=s;
+
+let uid="",roomId="",room=null,unsubscribe=null,activeTab="pay";
+
+signInAnonymously(auth).then(result=>{
+uid=result.user.uid;
+$("connection").textContent="已連線";
+const id=new URLSearchParams(location.search).get("room");
+if(id)$("roomCode").value=id.toUpperCase();
+}).catch(e=>{
+$("connection").textContent="連線失敗";
+msg("匿名登入失敗："+e.message);
+});
+
+function check(){
+if(uid)return true;
+msg("請等待 Firebase 登入完成");
+return false;
+}
+
+function enter(id){
+roomId=id;
+if(unsubscribe)unsubscribe();
+unsubscribe=onValue(ref(db,"rooms/"+id),snap=>{
+room=snap.val();
+if(!room){msg("房間不存在");return;}
+render();
+},e=>msg("同步失敗："+e.message));
+history.replaceState(null,"",location.pathname+"?room="+id);
+$("setup").classList.add("hidden");
+$("app").classList.remove("hidden");
+}
+
+$("create").onclick=async()=>{
+if(!check())return;
+const name=$("name").value.trim();
+if(!name)return msg("請輸入名字");
+const id=Math.random().toString(36).slice(2,8).toUpperCase();
+try{
+await set(ref(db,"rooms/"+id),{
+owner:uid,base:30,rate:10,createdAt:Date.now(),
+players:{[uid]:{name}}
+});
+enter(id);
+}catch(e){msg("建立失敗："+e.message);}
+};
+
+$("join").onclick=async()=>{
+if(!check())return;
+const name=$("name").value.trim();
+const id=$("roomCode").value.trim().toUpperCase();
+if(!name||!id)return msg("請輸入名字和房號");
+try{
+const snap=await get(ref(db,"rooms/"+id));
+if(!snap.exists())return msg("找不到房間");
+const players=snap.val().players||{};
+if(!players[uid]&&Object.keys(players).length>=8)
+return msg("房間已有 8 位玩家");
+await set(ref(db,"rooms/"+id+"/players/"+uid),{name});
+enter(id);
+}catch(e){msg("加入失敗："+e.message);}
+};
+
+$("invite").onclick=async()=>{
+const link=location.origin+location.pathname+"?room="+roomId;
+try{
+if(navigator.share)await navigator.share({title:"麻將牌桌",url:link});
+else{await navigator.clipboard.writeText(link);msg("連結已複製");}
+}catch(e){
+if(e.name!=="AbortError")prompt("請複製連結",link);
+}
+};
+
+$("leave").onclick=()=>{
+if(unsubscribe)unsubscribe();
+room=null;roomId="";
+$("app").classList.add("hidden");
+$("setup").classList.remove("hidden");
+history.replaceState(null,"",location.pathname);
+msg("已離開畫面，原本帳目仍保留。");
+};
+
+document.querySelectorAll("[data-tab]").forEach(b=>{
+b.onclick=()=>{activeTab=b.dataset.tab;render();};
+});
+
+function calculate(){
+if(!room)return;
+const tai=Number($("tai").value);
+$("amount").textContent=Number.isInteger(tai)&&tai>=0
+?"應付 "+money(Number(room.base)+tai*Number(room.rate))+" 元"
+:"請輸入正確台數";
+}
+$("tai").oninput=calculate;
+
+$("send").onclick=async()=>{
+if(!room||!check())return;
+const to=$("winner").value;
+const tai=Number($("tai").value);
+if(!room.players?.[to]||to===uid)return msg("請選擇贏家");
+if(!Number.isInteger(tai)||tai<0||tai>100)
+return msg("台數請輸入 0～100 的整數");
+const amount=Number(room.base)+tai*Number(room.rate);
+if(!Number.isSafeInteger(amount)||amount<0)return msg("金額無效");
+$("send").disabled=true;
+try{
+await push(ref(db,"rooms/"+roomId+"/payments"),{
+from:uid,to,tai,amount,status:"pending",createdAt:Date.now()
+});
+msg("已送出！等待贏家接收。");
+}catch(e){msg("送出失敗："+e.message);}
+finally{$("send").disabled=false;}
+};
+
+window.handlePayment=async(id,action)=>{
+const p=room?.payments?.[id];
+if(!p||p.to!==uid||p.status!=="pending")return;
+try{
+const result=await runTransaction(
+ref(db,"rooms/"+roomId+"/payments/"+id),
+v=>{
+if(!v||v.to!==uid||v.status!=="pending")return;
+return {...v,status:action,acceptedAt:Date.now()};
+},{applyLocally:false});
+msg(result.committed?"處理完成":"這筆款項已處理");
+}catch(e){msg("操作失敗："+e.message);}
+};
+
+$("save").onclick=async()=>{
+if(!room||room.owner!==uid)return;
+const base=Number($("base").value),rate=Number($("rate").value);
+if(!Number.isSafeInteger(base)||!Number.isSafeInteger(rate)||base<0||rate<0)
+return msg("請輸入正確金額");
+try{
+await update(ref(db,"rooms/"+roomId),{base,rate});
+msg("設定已更新");
+}catch(e){msg("更新失敗："+e.message);}
+};
+
+function render(){
+if(!room)return;
+const players=room.players||{};
+const payments=Object.entries(room.payments||{});
+$("roomTitle").textContent="房號："+roomId;
+$("people").textContent="玩家："+Object.values(players).map(p=>p.name).join("、");
+
+const oldWinner=$("winner").value;
+$("winner").innerHTML=Object.entries(players)
+.filter(([id])=>id!==uid)
+.map(([id,p])=>`<option value="${clean(id)}">${clean(p.name)}</option>`).join("");
+if(players[oldWinner]&&oldWinner!==uid)$("winner").value=oldWinner;
+
+const pending=payments.filter(([,p])=>p.to===uid&&p.status==="pending");
+$("count").textContent=pending.length?"("+pending.length+")":"";
+$("pending").innerHTML=pending.map(([id,p])=>`
+<div class="entry">
+<b>${clean(players[p.from]?.name||"未知玩家")}</b>
+放槍 ${p.tai} 台，應收 <b>${money(p.amount)} 元</b>
+<div class="row">
+<button class="primary" onclick="handlePayment('${id}','accepted')">接收</button>
+<button onclick="handlePayment('${id}','rejected')">拒絕</button>
+</div></div>`).join("")||"<p>目前沒有待接收款項</p>";
+
+const sums={};
+Object.keys(players).forEach(id=>sums[id]=0);
+payments.filter(([,p])=>p.status==="accepted").forEach(([,p])=>{
+sums[p.from]=(sums[p.from]||0)-p.amount;
+sums[p.to]=(sums[p.to]||0)+p.amount;
+});
+$("scores").innerHTML=Object.entries(players)
+.sort(([a],[b])=>(sums[b]||0)-(sums[a]||0))
+.map(([id,p])=>`<div class="entry">
+<b>${clean(p.name)}</b>
+<strong class="${sums[id]>=0?"pos":"neg"}" style="float:right">
+${sums[id]>0?"+":""}${money(sums[id])} 元
+</strong></div>`).join("");
+
+$("records").innerHTML=payments
+.filter(([,p])=>p.status==="accepted")
+.reverse().map(([,p])=>`<div class="entry">
+${clean(players[p.from]?.name||"未知")}
+→ ${clean(players[p.to]?.name||"未知")}
+｜${p.tai} 台｜${money(p.amount)} 元
+</div>`).join("")||"<p>尚無已確認紀錄</p>";
+
+$("base").value=room.base;
+$("rate").value=room.rate;
+$("save").disabled=room.owner!==uid;
+["pay","inbox","score"].forEach(id=>
+$(id).classList.toggle("hidden",id!==activeTab));
+calculate();
+}
+</script>
+</body>
+</html>
