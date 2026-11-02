@@ -232,6 +232,7 @@ await push(ref(db,"rooms/"+roomId+"/payments"),{
 from:uid,to,tai,amount,status:"pending",createdAt:Date.now()
 });
 msg("已送出！等待贏家接收。");
+  resetTaiKeypad();
 }catch(e){msg("送出失敗："+e.message);}
 finally{$("send").disabled=false;}
 };
@@ -522,6 +523,25 @@ keys.forEach(key => {
   document.getElementById("taiKeys")
     .appendChild(button);
 });
+
+function resetTaiKeypad() {
+  taiDigits = "0";
+  taiInput.value = "0";
+  document.getElementById("taiDisplay").textContent = "0 台";
+  calculate();
+}
+
+const sendButton = document.getElementById("send");
+
+if (sendButton) {
+  sendButton.addEventListener("click", function(event) {
+    if (Number(taiInput.value) <= 0) {
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      alert("請先輸入放槍台數！");
+    }
+  }, true);
+}
 
 </script>
 </body>
