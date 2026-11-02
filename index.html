@@ -314,6 +314,139 @@ $("save").disabled=room.owner!==uid;
 $(id).classList.toggle("hidden",id!==activeTab));
 calculate();
 }
+  
+// ===== 放槍等待確認視窗 =====
+const waitingStyle = document.createElement("style");
+waitingStyle.textContent = `
+#waitingOverlay {
+  position:fixed;
+  inset:0;
+  z-index:9999;
+  background:rgba(0,0,0,.55);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+}
+#waitingBox {
+  width:100%;
+  max-width:360px;
+  padding:28px 20px;
+  background:white;
+  border-radius:22px;
+  text-align:center;
+  box-shadow:0 12px 40px #0004;
+}
+#waitingBox h2 { color:#176244; }
+#waitingBox .sum {
+  font-size:36px;
+  font-weight:bold;
+  margin:20px 0;
+}
+#waitingBox .spinner {
+  width:35px;
+  height:35px;
+  margin:18px auto;
+  border:4px solid #dcebe1;
+  border-top-color:#176244;
+  border-radius:50%;
+  animation:waitSpin 1s linear infinite;
+}
+@keyframes waitSpin {
+  to { transform:rotate(360deg); }
+}
+button.hasPending {
+  background:#f59e0b !important;
+  color:#1c1706 !important;
+  font-weight:bold;
+  animation:pendingPulse 1.5s infinite;
+}
+@keyframes pendingPulse {
+  50% { filter:brightness(1.15); }
+}
+`;
+document.head.appendChild(waitingStyle);
+
+const overlay = document.createElement("div");
+overlay.id = "waitingOverlay";
+overlay.innerHTML = `
+<div id="waitingBox" role="status"
+aria-live="polite">
+  <h2>🀄 等待贏家接收</h2>
+  <p id="waitingWho"></p>
+  <div class="sum" id="waitingAmount"></div>
+  <div class="spinner"></div>
+  <p>已送出放槍金額</p>
+  <p>贏家確認後，視窗會自動消失</p>
+</div>`;
+document.body.appendChild(overlay);
+
+let previousPendingIds = new Set();
+
+function syncPendingUI() {
+  if (!room || !uid) {
+    overlay.style.display = "none";
+    return;
+  }
+
+  const entries = Object.entries(room.payments || {});
+  const mine = entries.filter(([id,p]) =>
+    p.from === uid && p.status === "pending"
+  );
+
+  const received = entries.some(([id,p]) =>
+    previousPendingIds.has(id) &&
+    p.from === uid &&
+    p.status === "accepted"
+  );
+
+  const rejected = entries.some(([id,p]) =>
+    previousPendingIds.has(id) &&
+    p.from === uid &&
+    p.status === "rejected"
+  );
+
+  if (received) msg("✅ 贏家已接收，正式入帳！");
+  else if (rejected) msg("⚠️ 贏家拒絕了這筆款項。");
+
+  previousPendingIds = new Set(
+    mine.map(([id]) => id)
+  );
+
+  if (mine.length) {
+    const [,p] = mine[mine.length - 1];
+    $("waitingWho").textContent =
+      "贏家：" +
+      (room.players?.[p.to]?.name || "玩家");
+    $("waitingAmount").textContent =
+      money(p.amount) + " 元";
+    overlay.style.display = "flex";
+  } else {
+    overlay.style.display = "none";
+  }
+
+  const incoming = entries.filter(([,p]) =>
+    p.to === uid && p.status === "pending"
+  );
+
+  const inboxButton =
+    document.querySelector('[data-tab="inbox"]');
+
+  if (inboxButton) {
+    inboxButton.classList.toggle(
+      "hasPending",
+      incoming.length > 0
+    );
+  }
+}
+
+// 每次 Firebase 同步資料時更新畫面
+const originalRender = render;
+render = function() {
+  originalRender();
+  syncPendingUI();
+};
+
 </script>
 </body>
 </html>
