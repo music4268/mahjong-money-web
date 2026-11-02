@@ -447,6 +447,82 @@ render = function() {
   syncPendingUI();
 };
 
+// ===== 放槍台數九宮格鍵盤 =====
+const taiInput = document.getElementById("tai");
+taiInput.type = "hidden";
+
+const keypad = document.createElement("div");
+keypad.innerHTML = `
+  <div id="taiDisplay">3 台</div>
+  <div id="taiKeys"></div>
+`;
+
+taiInput.insertAdjacentElement("afterend", keypad);
+
+const keypadStyle = document.createElement("style");
+keypadStyle.textContent = `
+#taiDisplay {
+  text-align:center;
+  font-size:38px;
+  font-weight:bold;
+  padding:18px;
+  background:#f1f5f2;
+  border-radius:14px;
+  margin:10px 0;
+}
+#taiKeys {
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:9px;
+}
+#taiKeys button {
+  height:65px;
+  font-size:25px;
+  font-weight:bold;
+  border-radius:14px;
+  background:#e9f0eb;
+}
+#taiKeys button:active {
+  background:#a5d6b8;
+}
+`;
+document.head.appendChild(keypadStyle);
+
+let taiDigits = "3";
+const keys = [
+  "1","2","3",
+  "4","5","6",
+  "7","8","9",
+  "清除","0","⌫"
+];
+
+keys.forEach(key => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = key;
+
+  button.onclick = () => {
+    if (key === "清除") {
+      taiDigits = "0";
+    } else if (key === "⌫") {
+      taiDigits = taiDigits.length > 1
+        ? taiDigits.slice(0,-1) : "0";
+    } else {
+      taiDigits = taiDigits === "0"
+        ? key : (taiDigits + key).slice(0,3);
+    }
+
+    const n = Number(taiDigits);
+    taiInput.value = n;
+    document.getElementById("taiDisplay")
+      .textContent = n + " 台";
+    calculate();
+  };
+
+  document.getElementById("taiKeys")
+    .appendChild(button);
+});
+
 </script>
 </body>
 </html>
